@@ -267,10 +267,20 @@ func (ts *InboundPersistentStream) Close() error {
 	var responseBody []byte
 	var meta llm.ResponseMeta
 	var aggErr error
+	explicitStreamError := streamErr != nil &&
+		!errors.Is(streamErr, context.Canceled) &&
+		!errors.Is(streamErr, context.DeadlineExceeded)
 
 	if len(ts.responseChunks) > 0 && !ts.state.StreamCompleted {
 		responseBody, meta, aggErr = ts.transformer.AggregateStreamChunks(context.WithoutCancel(ctx), ts.responseChunks)
-		if aggErr == nil && meta.ID != "" && len(responseBody) > 0 && isCompletedAggregated(meta) {
+		aggregatedCompleted := isCompletedAggregated(meta)
+		if explicitStreamError {
+			// Usage can be reported before a stream reaches its terminal event.
+			// An explicit transport error therefore requires the transformer to
+			// prove completion independently of usage accounting.
+			aggregatedCompleted = meta.Completed
+		}
+		if aggErr == nil && meta.ID != "" && len(responseBody) > 0 && aggregatedCompleted {
 			log.Debug(ctx, "Stream has valid complete response without terminal event, treating as completed")
 			ts.state.StreamCompleted = true
 		}
